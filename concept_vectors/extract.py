@@ -1,21 +1,21 @@
-"""Extraction de directions conceptuelles par paires minimales.
+"""Extracting concept directions from minimal prompt pairs.
 
-Principe : deux prompts **identiques sauf une proposition**, et la différence des
-activations n'encode que ce qui diffère. C'est la précaution centrale — un contraste
-« prompt contre absence de prompt » produit un vecteur qui mélange le concept visé, la
-longueur, le registre et tout ce que le prompt ajoute par ailleurs.
+The principle: two prompts **identical but for one proposition**, so the difference in
+activations encodes only what differs. This is the central precaution — a "prompt versus
+no prompt" contrast produces a vector that mixes the target concept with length, register,
+and everything else the prompt adds.
 
-Trois contrôles sont fournis, chacun né d'une erreur constatée :
+Three controls are provided, each born from a measurement that looked good and wasn't:
 
-  séparabilité hors échantillon   ajuster et tester sur les mêmes paires donne 100 %
-                                  jusqu'à la couche 0, avant qu'aucun concept ne soit
-                                  formé — c'est une tautologie, pas une mesure.
-  matrice de cosinus              deux concepts « distincts » peuvent partager
-                                  l'essentiel de leur direction. Sans elle, on croit
-                                  manipuler un concept alors qu'on en manipule un autre.
-  amplitude naturelle             la norme du vecteur avant normalisation est ce que le
-                                  prompt déplace réellement. Un α exprimé en unités
-                                  arbitraires n'est comparable à rien.
+  held-out separability   Fitting and testing on the same pairs gives 100% separation all
+                          the way down to layer 0, before any concept is formed. That is a
+                          tautology, not a measurement.
+  cosine matrix           Two "distinct" concepts can share most of their direction.
+                          Without it you believe you are manipulating one concept while
+                          manipulating another.
+  natural amplitude       The vector's norm before normalisation is what the prompt
+                          actually displaces. An alpha in arbitrary units is comparable to
+                          nothing.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _chat(tokenizer, system: str, user: str) -> str:
 
 def direction(model, tokenizer, base: str, positive: str, negative: str,
               queries: list[str]) -> dict[int, mx.array]:
-    """Différence de moyennes entre les deux branches d'une paire minimale."""
+    """Difference of means between the two branches of a minimal pair."""
     sums: dict[int, mx.array] = {}
     with ResidualTap(model) as tap:
         tap.selftest(model, tokenizer)
@@ -57,12 +57,12 @@ def direction(model, tokenizer, base: str, positive: str, negative: str,
 
 def separability(model, tokenizer, base: str, positive: str, negative: str,
                  test_queries: list[str], dirs: dict[int, mx.array]) -> dict[int, float]:
-    """Fraction de requêtes **non utilisées pour le calcul** où la projection classe
-    correctement la branche positive au-dessus de la négative. 0,5 = aucune séparation.
+    """Fraction of **held-out** queries where the projection ranks the positive branch
+    above the negative one. 0.5 means no separation at all.
 
-    Le profil par profondeur est plus informatif que la valeur maximale : une
-    séparabilité forte dès la couche 0 signale un contraste lisible dans les tokens
-    eux-mêmes — donc lexical, pas conceptuel.
+    The depth profile is more informative than the peak value: strong separability as
+    early as layer 0 means the contrast is readable in the token embeddings themselves,
+    so it is lexical rather than conceptual.
     """
     ok = {li: 0 for li in dirs}
     with ResidualTap(model) as tap:
@@ -80,13 +80,13 @@ def separability(model, tokenizer, base: str, positive: str, negative: str,
 
 def extract_all(model, tokenizer, spec: dict, layer: int, n_fit: int,
                 n_test: int) -> dict:
-    """Extrait une direction par concept, plus les diagnostics d'ensemble."""
+    """Extract one direction per concept, plus the whole-set diagnostics."""
     base = spec["base_prompt"]
     qs = spec["queries"]
     fit, test = qs[:n_fit], qs[n_fit:n_fit + n_test]
     if not test:
-        raise ValueError("pas assez de requêtes : il en faut pour l'ajustement ET "
-                         "pour le test hors échantillon")
+        raise ValueError("not enough queries: some are needed for fitting AND some, "
+                         "disjoint, for held-out testing")
 
     vecs, norms, seps = {}, {}, {}
     for c in spec["concepts"]:
@@ -98,44 +98,51 @@ def extract_all(model, tokenizer, spec: dict, layer: int, n_fit: int,
                          {layer: vecs[c["id"]]})
         seps[c["id"]] = s[layer]
         print(f"  {c['id']:<24} amplitude {norms[c['id']]:.4f}  "
-              f"séparabilité {seps[c['id']]:.3f}", flush=True)
+              f"separability {seps[c['id']]:.3f}", flush=True)
 
     ids = [c["id"] for c in spec["concepts"]]
+    # float32 is required: MLX's SVD rejects bfloat16, and cosines computed in bf16 came
+    # out at 1.01 on the diagonal — fine for reading structure, not for decomposition.
     M = mx.stack([vecs[i] for i in ids]).astype(mx.float32)
     cos = {a: {b: round(float((vecs[a] * vecs[b]).sum().item()), 3) for b in ids}
            for a in ids}
-    hors = [cos[a][b] for a, b in itertools.combinations(ids, 2)]
+    off = [cos[a][b] for a, b in itertools.combinations(ids, 2)]
 
     S = mx.linalg.svd(M, compute_uv=False, stream=mx.cpu)
     tot = float((S ** 2).sum().item())
-    cum, rang = 0.0, len(ids)
+    cum, rank = 0.0, len(ids)
     for i, s in enumerate(S.tolist()):
         cum += s * s
         if cum / tot >= 0.90:
-            rang = i + 1
+            rank = i + 1
             break
 
-    moy = M.mean(axis=0)
-    moy_u = moy / mx.linalg.norm(moy)
-    nat = statistics.fmean([norms[i] * abs(float((vecs[i] * moy_u).sum().item()))
+    # Combined vector: mean of the unit directions, every phrasing weighted equally.
+    # Weighting by norm would favour the wordings that move internal state the most,
+    # which is a property of vocabulary rather than a criterion of correctness.
+    mean = M.mean(axis=0)
+    mean_u = mean / mx.linalg.norm(mean)
+    nat = statistics.fmean([norms[i] * abs(float((vecs[i] * mean_u).sum().item()))
                             for i in ids])
 
     return {
-        "layer": layer, "ids": ids, "vectors": vecs, "combined": moy_u,
+        "layer": layer, "ids": ids, "vectors": vecs, "combined": mean_u,
         "report": {
-            "amplitudes": norms, "separabilites": seps, "cosinus": cos,
-            "cosinus_hors_diagonale": {
-                "moyenne": round(statistics.fmean(hors), 3),
-                "max": round(max(hors), 3), "min": round(min(hors), 3)},
-            "valeurs_singulieres": [round(float(x), 3) for x in S.tolist()],
-            "rang_effectif_90pct": rang,
-            "amplitude_naturelle_combinee": round(nat, 4),
-            "alphas_suggeres": [round(k * nat, 3) for k in (0.5, 1, 2, 3)],
+            "amplitudes": norms, "separability": seps, "cosine": cos,
+            "cosine_off_diagonal": {
+                "mean": round(statistics.fmean(off), 3),
+                "max": round(max(off), 3), "min": round(min(off), 3)},
+            "singular_values": [round(float(x), 3) for x in S.tolist()],
+            "effective_rank_90pct": rank,
+            "combined_natural_amplitude": round(nat, 4),
+            "suggested_alphas": [round(k * nat, 3) for k in (0.5, 1, 2, 3)],
         },
     }
 
 
 def save(result: dict, out_dir: Path, n_layers: int) -> None:
+    """Write the combined vector (padded to the model's layer count), the per-concept
+    stack, and the diagnostics report."""
     out_dir.mkdir(parents=True, exist_ok=True)
     d = result["combined"].shape[0]
     layer = result["layer"]

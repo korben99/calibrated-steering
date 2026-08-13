@@ -1,12 +1,11 @@
-"""concept-vectors — extraire, contrôler et appliquer des directions conceptuelles.
+"""calibrated-steering — extract, validate and apply concept directions.
 
-Boîte à outils pour isoler un concept dans les activations d'un modèle de langage à
-partir de **paires minimales** de prompts, vérifier qu'on a bien isolé ce qu'on croit,
-et l'appliquer à l'inférence sans abîmer le modèle.
+A toolkit for isolating a concept in a language model's activations from **minimal
+prompt pairs**, checking that you isolated what you think you did, and applying it at
+inference without breaking the model.
 
-L'essentiel de la valeur est dans les contrôles, pas dans l'extraction : une différence
-de moyennes s'écrit en dix lignes, mais elle produit un vecteur qui *paraît* juste dans
-un très grand nombre de cas où il ne l'est pas.
+Most of the value is in the controls, not the extraction: a difference of means takes ten
+lines, but it produces a vector that *looks* correct in a great many cases where it isn't.
 """
 
 from .tap import ResidualTap

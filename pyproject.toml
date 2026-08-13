@@ -3,7 +3,20 @@ name = "calibrated-steering"
 version = "0.1.0"
 description = "Extract, validate and apply concept directions in a language model"
 requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["interpretability", "activation-steering", "concept-vectors", "mlx", "llm"]
+authors = [{ name = "korben99" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = ["mlx>=0.29", "mlx-lm>=0.28"]
+
+[project.urls]
+Homepage = "https://github.com/korben99/calibrated-steering"
+Issues = "https://github.com/korben99/calibrated-steering/issues"
 
 [project.scripts]
 calibrated-steering = "concept_vectors.cli:main"
